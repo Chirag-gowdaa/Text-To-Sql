@@ -1,0 +1,206 @@
+:root {
+  --bg: #0A0A0F;
+  --surface: #111118;
+  --surface-elevated: #1A1A24;
+  --border: #2A2A3A;
+  --primary: #6C63FF;
+  --primary-glow: rgba(108, 99, 255, 0.3);
+  --primary-hover: #7D75FF;
+  --secondary: #00D4FF;
+  --secondary-glow: rgba(0, 212, 255, 0.25);
+  --success: #00FF88;
+  --warning: #FFB800;
+  --error: #FF4455;
+  --text-primary: #FFFFFF;
+  --text-secondary: #8888AA;
+  --text-muted: #555566;
+
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  min-height: 100%;
+  background-color: var(--bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+}
+
+/* Background Ambient Animated Gradient Blobs */
+.ambient-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: 0.18;
+  will-change: transform;
+}
+
+.blob-1 {
+  width: 550px;
+  height: 550px;
+  background: radial-gradient(circle, #6C63FF 0%, rgba(108, 99, 255, 0) 70%);
+  top: -100px;
+  left: -100px;
+  animation: floatBlob1 24s ease-in-out infinite alternate;
+}
+
+.blob-2 {
+  width: 500px;
+  height: 500px;
+  background: radial-gradient(circle, #00D4FF 0%, rgba(0, 212, 255, 0) 70%);
+  top: 30%;
+  right: -120px;
+  animation: floatBlob2 28s ease-in-out infinite alternate;
+}
+
+.blob-3 {
+  width: 600px;
+  height: 600px;
+  background: radial-gradient(circle, #4A00E0 0%, rgba(74, 0, 224, 0) 70%);
+  bottom: -150px;
+  left: 25%;
+  animation: floatBlob3 32s ease-in-out infinite alternate;
+}
+
+@keyframes floatBlob1 {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(120px, 80px) scale(1.1); }
+  100% { transform: translate(40px, 140px) scale(0.95); }
+}
+
+@keyframes floatBlob2 {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-100px, 120px) scale(1.15); }
+  100% { transform: translate(-50px, -60px) scale(0.9); }
+}
+
+@keyframes floatBlob3 {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-80px, -100px) scale(1.08); }
+  100% { transform: translate(70px, -50px) scale(0.92); }
+}
+
+/* Scrollbar Customization */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(10, 10, 15, 0.8);
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2A2A3A;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3E3E56;
+}
+
+/* Custom Selection */
+::selection {
+  background: rgba(108, 99, 255, 0.35);
+  color: #FFFFFF;
+}
+
+/* App container */
+.app-layout {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.main-content {
+  flex: 1;
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 32px 20px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+/* Glassmorphic and surface helper classes */
+.glass-header {
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  background: rgba(17, 17, 24, 0.75);
+  border-bottom: 1px solid var(--border);
+}
+
+.surface-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.36);
+}
+
+.surface-elevated-card {
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+}
+
+/* Interactive focus glow */
+.input-glow-focus {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.input-glow-focus:focus-within,
+.input-glow-focus:focus {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 1px var(--primary), 0 0 20px var(--primary-glow) !important;
+  outline: none;
+}
+
+/* Pulsing dot animation */
+@keyframes pulseDot {
+  0%, 80%, 100% {
+    opacity: 0.3;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.dot-1 {
+  animation: pulseDot 1.4s infinite ease-in-out;
+}
+
+.dot-2 {
+  animation: pulseDot 1.4s infinite ease-in-out;
+  animation-delay: 0.2s;
+}
+
+.dot-3 {
+  animation: pulseDot 1.4s infinite ease-in-out;
+  animation-delay: 0.4s;
+}

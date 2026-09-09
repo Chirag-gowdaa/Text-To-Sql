@@ -1,0 +1,104 @@
+I am using fastapi:
+fastapi is a python based web framework which 
+
+Packages needed for this Backend:
+1.fastapi
+2.groq
+3.uvicorn
+4.faker - to generate fake data for our database and test it.
+5.python-dotenv - for enironment variables.
+
+cmd: pip install fastapi uvicorn groq python-dotenv faker
+
+Guide to run backend-> activate venv (cmd): venv\Scripts\activate
+
+(run): uvicorn main:app --reload | ---note---: uvicorn is like nodemon for js or nodemon
+
+
+#Important for Porject:
+->Ambiguity detector =>
+
+
+User question
+      ↓
+Ambiguity Detector
+      ↓
+ ┌───────────────┐
+ │ Clear?        │
+ └───────────────┘
+    ↓          ↓
+   YES         NO
+    ↓          ↓
+Generate SQL   Ask clarification
+
+means when user gives a query if its clear it gets executed and get output if its ambigious then the ai must ask for further classification to give precise answers.
+
+note: building this might cause some headache and problem i need deeper understading of llms (other option was to build seperate ml model)
+
+
+Here is the main brain for ambiguity :
+prompt = (
+        """
+        You are a SQL analyst. You are given a database schema and a user query.
+        Your job is to check if the query is too vague to write accurate SQL.
+        
+        Database schema:
+        """
+                + schema
+                + """
+        
+        User query: \""""
+                + user_query
+                + """\"
+        
+        Examples of AMBIGUOUS queries:
+        - "show me recent orders" → recent is not defined
+        - "top customers" → top by what? how many?
+        - "active users" → what makes a user active?
+        - "show me sales" → which time period?
+        
+        Examples of CLEAR queries:
+        - "show me orders from last 7 days"
+        - "top 5 customers by total revenue in 2025"
+        - "all products with stock less than 10"
+        
+        Return ONLY this JSON. No explanation. No markdown. Just raw JSON:
+        {
+          "is_ambiguous": true or false,
+          "reason": "what is unclear, or null if clear",
+          "clarification_question": "one question to ask the user, or null if clear",
+          "confidence": a number between 0.0 and 1.0
+        }
+        """
+    )
+    response = client.chat.completions.create(
+        model="qwen/qwen3.6-27b",  # ← use this
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+    )
+
+    raw = response.choices[0].message.content.strip()
+
+    print("Raw response from LLM:", raw)
+
+    start = raw.find("{")
+
+    if start == -1:
+        raise ValueError(f"No JSON object found in LLM response:\n{raw}")
+
+    decoder = json.JSONDecoder()
+
+    result, end = decoder.raw_decode(raw[start:])
+
+    return result ---should be written inside the def function.
+
+
+#PROGRESS REPORT:
+the rough working model is done which just only works for sqlite and database which is hardcoded and any kind of database.
+-> in next process i am planning to update it to work with any database not just sqlite and also the method to read db will be not uploading the whole db
+but use just provides the User sends a connection string + query instead of uploading a file
+You use SQLAlchemy to connect to any database dynamically
+schema_loader and sql_executor use that connection instead of hardcoded database.db
+
+
+#updated backend:
