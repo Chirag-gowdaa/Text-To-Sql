@@ -16,28 +16,61 @@ export const apiClient = axios.create({
  */
 function handleApiError(error, contextDescription) {
   if (error.response) {
-    // The server responded with a status outside 2xx
     const detail =
-      error.response.data?.detail ||
       error.response.data?.message ||
+      error.response.data?.detail ||
+      error.response.data?.error ||
       JSON.stringify(error.response.data) ||
       error.response.statusText;
     const status = error.response.status;
     const err = new Error(`API Error (${status}) during ${contextDescription}: ${detail}`);
     err.isApiError = true;
     err.status = status;
+    err.rawDetail = detail;
     throw err;
   } else if (error.request) {
-    // Request was initiated but no response was received (e.g. backend down / CORS issue)
     const err = new Error(
       `Network Error: Unable to connect to backend at ${API_BASE_URL}. Ensure the FastAPI server is running (e.g., uvicorn main:app --reload).`
     );
     err.isNetworkError = true;
     throw err;
   } else {
-    // Something else went wrong configuring the request
     const err = new Error(`Request setup error: ${error.message}`);
     throw err;
+  }
+}
+
+/**
+ * Connects to a database using a connection string.
+ * @param {string} connectionString
+ * @returns {Promise<{ success: boolean, session_id?: string, schema?: string, message?: string }>}
+ */
+export async function connectDatabase(connectionString) {
+  try {
+    const response = await apiClient.post('/connect', {
+      connection_string: connectionString,
+    });
+    return response.data;
+  } catch (error) {
+    return handleApiError(error, 'database connection');
+  }
+}
+
+/**
+ * Disconnects from an active database session.
+ * @param {string} sessionId
+ * @returns {Promise<{ message: string }>}
+ */
+export async function disconnectDatabase(sessionId) {
+  try {
+    const response = await apiClient.post(
+      '/disconnect',
+      { session_id: sessionId },
+      { params: { session_id: sessionId } }
+    );
+    return response.data;
+  } catch (error) {
+    return handleApiError(error, 'database disconnection');
   }
 }
 
@@ -45,13 +78,15 @@ function handleApiError(error, contextDescription) {
  * Analyzes the user's natural language query and any accumulated clarifications for ambiguity.
  * @param {string} query
  * @param {string[]} clarifications
+ * @param {string} sessionId
  * @returns {Promise<{ is_ambiguous: boolean, reason?: string, clarification_question?: string, confidence: number }>}
  */
-export async function analyzeQuery(query, clarifications = []) {
+export async function analyzeQuery(query, clarifications = [], sessionId = '') {
   try {
     const response = await apiClient.post('/analyze', {
       query,
       clarifications,
+      session_id: sessionId,
     });
     return response.data;
   } catch (error) {
@@ -60,17 +95,29 @@ export async function analyzeQuery(query, clarifications = []) {
 }
 
 /**
- * Generates SQL and executes it against the database.
+ * Generates SQL and executes it against the database with pagination support.
  * @param {string} query
  * @param {string[]} clarifications
- * @returns {Promise<{ sql: string, results: Array<Record<string, any>>, row_count: number }>}
+ * @param {string} sessionId
+ * @param {number} limit
+ * @param {number} offset
+ * @returns {Promise<{ sql: string, results: Array<Record<string, any>>, row_count: number, total_count: number, current_page: number, total_pages: number, limit: number, offset: number }>}
  */
-export async function generateSQL(query, clarifications = []) {
+export async function generateSQL(query, clarifications = [], sessionId = '', limit = 20, offset = 0) {
   try {
-    const response = await apiClient.post('/generate', {
-      query,
-      clarifications,
-    });
+    const response = await apiClient.post(
+      '/generate',
+      {
+        query,
+        clarifications,
+        session_id: sessionId,
+        limit,
+        offset,
+      },
+      {
+        params: { limit, offset },
+      }
+    );
     return response.data;
   } catch (error) {
     return handleApiError(error, 'SQL generation & execution');

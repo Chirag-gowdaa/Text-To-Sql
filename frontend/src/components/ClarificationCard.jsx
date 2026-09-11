@@ -127,7 +127,7 @@ export default function ClarificationCard({
         style={{
           fontSize: '1.18rem',
           fontWeight: '600',
-          color: '#FFFFFF',
+          color: 'var(--text-primary)',
           lineHeight: '1.45',
           marginBottom: reason ? '8px' : '18px',
         }}
@@ -175,7 +175,7 @@ export default function ClarificationCard({
               backgroundColor: 'var(--surface)',
               border: '1px solid var(--border)',
               borderRadius: '10px',
-              color: '#FFFFFF',
+              color: 'var(--text-primary)',
               fontSize: '0.95rem',
               outline: 'none',
               transition: 'border-color 0.2s, box-shadow 0.2s',

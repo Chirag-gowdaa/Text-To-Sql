@@ -200,7 +200,7 @@ export default function QueryInput({
                 onClick={() => handleChipClick(example)}
                 disabled={isBusy}
                 style={{
-                  background: 'rgba(26, 26, 36, 0.9)',
+                  background: 'var(--surface-elevated)',
                   border: '1px solid var(--border)',
                   color: 'var(--text-secondary)',
                   borderRadius: '20px',
@@ -212,7 +212,7 @@ export default function QueryInput({
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.borderColor = 'var(--primary)';
-                  e.currentTarget.style.color = '#FFFFFF';
+                  e.currentTarget.style.color = 'var(--text-primary)';
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.borderColor = 'var(--border)';

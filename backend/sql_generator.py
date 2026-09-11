@@ -34,6 +34,7 @@ def generate_sql(query , schema, clarifications = []   ):
         model="qwen/qwen3.6-27b",
         messages=[{"role": "user", "content": prompt}],
         max_completion_tokens = 512,
+        max_tokens = 500,
         reasoning_effort = "none",
         temperature=0,
     )

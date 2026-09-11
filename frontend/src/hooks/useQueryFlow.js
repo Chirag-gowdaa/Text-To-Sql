@@ -1,5 +1,10 @@
 import { useReducer, useCallback } from 'react';
-import { analyzeQuery, generateSQL } from '../api/client';
+import {
+  analyzeQuery,
+  generateSQL,
+  connectDatabase,
+  disconnectDatabase,
+} from '../api/client';
 
 export const STATUS = {
   IDLE: 'IDLE',
@@ -21,18 +26,72 @@ const initialState = {
   sqlResult: null,
   error: null,
   history: [], // Array of { id, type, content, turn, confidence, reason, timestamp }
+
+  // Database session & connection state
+  sessionId: null,
+  schema: null,
+  connectionString: '',
+  isConnected: false,
+  isConnecting: false,
+  connectionError: null,
+  isPaginating: false,
 };
 
 function queryFlowReducer(state, action) {
   switch (action.type) {
+    case 'START_CONNECTING': {
+      return {
+        ...state,
+        isConnecting: true,
+        connectionError: null,
+      };
+    }
+
+    case 'CONNECT_SUCCESS': {
+      const { sessionId, schema, connectionString } = action.payload;
+      return {
+        ...state,
+        isConnected: true,
+        isConnecting: false,
+        sessionId,
+        schema,
+        connectionString,
+        connectionError: null,
+        status: STATUS.IDLE,
+        originalQuery: '',
+        clarifications: [],
+        history: [],
+        sqlResult: null,
+        error: null,
+        isPaginating: false,
+      };
+    }
+
+    case 'CONNECT_FAILURE': {
+      return {
+        ...state,
+        isConnecting: false,
+        isConnected: false,
+        connectionError: action.payload.error,
+      };
+    }
+
+    case 'DISCONNECT': {
+      return {
+        ...initialState,
+      };
+    }
+
     case 'START_QUERY_ANALYSIS': {
       const { query } = action.payload;
       return {
-        ...initialState,
+        ...state,
         status: STATUS.ANALYZING,
         originalQuery: query,
         turn: 0,
         clarifications: [],
+        sqlResult: null,
+        error: null,
         history: [
           {
             id: `query-${Date.now()}`,
@@ -94,12 +153,19 @@ function queryFlowReducer(state, action) {
       };
     }
 
+    case 'START_PAGINATING': {
+      return {
+        ...state,
+        isPaginating: true,
+      };
+    }
+
     case 'SET_RESULTS': {
-      const { sql, results, row_count } = action.payload;
       return {
         ...state,
         status: STATUS.RESULTS,
-        sqlResult: { sql, results, row_count },
+        isPaginating: false,
+        sqlResult: action.payload,
         error: null,
       };
     }
@@ -108,13 +174,25 @@ function queryFlowReducer(state, action) {
       return {
         ...state,
         status: STATUS.ERROR,
+        isPaginating: false,
         error: action.payload.error,
       };
     }
 
     case 'RESET': {
       return {
-        ...initialState,
+        ...state,
+        status: STATUS.IDLE,
+        originalQuery: '',
+        clarifications: [],
+        currentQuestion: '',
+        turn: 0,
+        confidence: 1,
+        reason: '',
+        sqlResult: null,
+        error: null,
+        history: [],
+        isPaginating: false,
       };
     }
 
@@ -127,7 +205,66 @@ export function useQueryFlow() {
   const [state, dispatch] = useReducer(queryFlowReducer, initialState);
 
   /**
-   * Submit the initial natural language query.
+   * Connect to database using connection string.
+   */
+  const connectDb = useCallback(async (connectionString) => {
+    const trimmed = (connectionString || '').trim();
+    if (!trimmed) {
+      dispatch({
+        type: 'CONNECT_FAILURE',
+        payload: { error: 'Please provide a valid database connection string.' },
+      });
+      return false;
+    }
+
+    dispatch({ type: 'START_CONNECTING' });
+
+    try {
+      const res = await connectDatabase(trimmed);
+      if (res && res.success) {
+        dispatch({
+          type: 'CONNECT_SUCCESS',
+          payload: {
+            sessionId: res.session_id,
+            schema: res.schema,
+            connectionString: trimmed,
+          },
+        });
+        return true;
+      } else {
+        const errorMsg =
+          res?.message || res?.error || 'Failed to connect to database. Check connection string.';
+        dispatch({
+          type: 'CONNECT_FAILURE',
+          payload: { error: errorMsg },
+        });
+        return false;
+      }
+    } catch (err) {
+      dispatch({
+        type: 'CONNECT_FAILURE',
+        payload: { error: err.rawDetail || err.message || 'Connection failed.' },
+      });
+      return false;
+    }
+  }, []);
+
+  /**
+   * Disconnect the current database session.
+   */
+  const disconnectDb = useCallback(async () => {
+    if (state.sessionId) {
+      try {
+        await disconnectDatabase(state.sessionId);
+      } catch (err) {
+        console.warn('Disconnect error ignored:', err);
+      }
+    }
+    dispatch({ type: 'DISCONNECT' });
+  }, [state.sessionId]);
+
+  /**
+   * Submit the natural language query for the active session.
    */
   const submitQuery = useCallback(async (query) => {
     const trimmed = (query || '').trim();
@@ -136,7 +273,7 @@ export function useQueryFlow() {
     dispatch({ type: 'START_QUERY_ANALYSIS', payload: { query: trimmed } });
 
     try {
-      const analyzeData = await analyzeQuery(trimmed, []);
+      const analyzeData = await analyzeQuery(trimmed, [], state.sessionId);
 
       if (analyzeData?.is_ambiguous) {
         dispatch({
@@ -149,25 +286,35 @@ export function useQueryFlow() {
           },
         });
       } else {
-        // Query is clear -> immediately generate SQL
+        // Query is clear -> immediately generate SQL & measure execution time
         dispatch({ type: 'START_GENERATING' });
-        const genData = await generateSQL(trimmed, []);
+        const startTime = performance.now();
+        const genData = await generateSQL(trimmed, [], state.sessionId, 20, 0);
+        const endTime = performance.now();
+        const executionTimeMs = Math.round(endTime - startTime);
+
         dispatch({
           type: 'SET_RESULTS',
           payload: {
             sql: genData.sql,
             results: genData.results || [],
             row_count: genData.row_count ?? (genData.results ? genData.results.length : 0),
+            total_count: genData.total_count ?? (genData.results ? genData.results.length : 0),
+            current_page: genData.current_page ?? 1,
+            total_pages: genData.total_pages ?? 1,
+            limit: genData.limit ?? 20,
+            offset: genData.offset ?? 0,
+            executionTimeMs,
           },
         });
       }
     } catch (err) {
       dispatch({
         type: 'SET_ERROR',
-        payload: { error: err.message || 'Failed to process query' },
+        payload: { error: err.rawDetail || err.message || 'Failed to process query' },
       });
     }
-  }, []);
+  }, [state.sessionId]);
 
   /**
    * Submit an answer to a clarification question.
@@ -188,26 +335,45 @@ export function useQueryFlow() {
     });
 
     try {
-      // If turn was already 3 (or about to exceed max turns), force generate regardless
+      // If turn was already 3, force generate regardless
       if (currentTurn >= 3) {
         dispatch({ type: 'START_GENERATING' });
-        const genData = await generateSQL(state.originalQuery, updatedClarifications);
+        const startTime = performance.now();
+        const genData = await generateSQL(
+          state.originalQuery,
+          updatedClarifications,
+          state.sessionId,
+          20,
+          0
+        );
+        const endTime = performance.now();
+        const executionTimeMs = Math.round(endTime - startTime);
+
         dispatch({
           type: 'SET_RESULTS',
           payload: {
             sql: genData.sql,
             results: genData.results || [],
             row_count: genData.row_count ?? (genData.results ? genData.results.length : 0),
+            total_count: genData.total_count ?? (genData.results ? genData.results.length : 0),
+            current_page: genData.current_page ?? 1,
+            total_pages: genData.total_pages ?? 1,
+            limit: genData.limit ?? 20,
+            offset: genData.offset ?? 0,
+            executionTimeMs,
           },
         });
         return;
       }
 
       // Re-analyze with updated clarifications
-      const analyzeData = await analyzeQuery(state.originalQuery, updatedClarifications);
+      const analyzeData = await analyzeQuery(
+        state.originalQuery,
+        updatedClarifications,
+        state.sessionId
+      );
 
       if (analyzeData?.is_ambiguous && currentTurn < 3) {
-        // Still ambiguous and turns remaining
         dispatch({
           type: 'AMBIGUITY_DETECTED',
           payload: {
@@ -218,28 +384,87 @@ export function useQueryFlow() {
           },
         });
       } else {
-        // Either unambiguous now OR reached max turn limit -> generate SQL
         dispatch({ type: 'START_GENERATING' });
-        const genData = await generateSQL(state.originalQuery, updatedClarifications);
+        const startTime = performance.now();
+        const genData = await generateSQL(
+          state.originalQuery,
+          updatedClarifications,
+          state.sessionId,
+          20,
+          0
+        );
+        const endTime = performance.now();
+        const executionTimeMs = Math.round(endTime - startTime);
+
         dispatch({
           type: 'SET_RESULTS',
           payload: {
             sql: genData.sql,
             results: genData.results || [],
             row_count: genData.row_count ?? (genData.results ? genData.results.length : 0),
+            total_count: genData.total_count ?? (genData.results ? genData.results.length : 0),
+            current_page: genData.current_page ?? 1,
+            total_pages: genData.total_pages ?? 1,
+            limit: genData.limit ?? 20,
+            offset: genData.offset ?? 0,
+            executionTimeMs,
           },
         });
       }
     } catch (err) {
       dispatch({
         type: 'SET_ERROR',
-        payload: { error: err.message || 'Failed to process clarification' },
+        payload: { error: err.rawDetail || err.message || 'Failed to process clarification' },
       });
     }
-  }, [state.turn, state.clarifications, state.originalQuery]);
+  }, [state.turn, state.clarifications, state.originalQuery, state.sessionId]);
 
   /**
-   * Reset conversation state back to IDLE.
+   * Request a different page of results for the existing query without resetting session.
+   */
+  const changePage = useCallback(async (newPage, newLimit) => {
+    if (!state.originalQuery || !state.sessionId) return;
+    const limit = newLimit || state.sqlResult?.limit || 20;
+    const offset = Math.max(0, (newPage - 1) * limit);
+
+    dispatch({ type: 'START_PAGINATING' });
+
+    const startTime = performance.now();
+    try {
+      const genData = await generateSQL(
+        state.originalQuery,
+        state.clarifications,
+        state.sessionId,
+        limit,
+        offset
+      );
+      const endTime = performance.now();
+      const executionTimeMs = Math.round(endTime - startTime);
+
+      dispatch({
+        type: 'SET_RESULTS',
+        payload: {
+          sql: genData.sql || state.sqlResult?.sql,
+          results: genData.results || [],
+          row_count: genData.row_count ?? (genData.results ? genData.results.length : 0),
+          total_count: genData.total_count ?? state.sqlResult?.total_count ?? (genData.results ? genData.results.length : 0),
+          current_page: genData.current_page ?? newPage,
+          total_pages: genData.total_pages ?? Math.max(1, Math.ceil((genData.total_count || 1) / limit)),
+          limit: genData.limit ?? limit,
+          offset: genData.offset ?? offset,
+          executionTimeMs,
+        },
+      });
+    } catch (err) {
+      dispatch({
+        type: 'SET_ERROR',
+        payload: { error: err.rawDetail || err.message || 'Failed to load page' },
+      });
+    }
+  }, [state.originalQuery, state.clarifications, state.sessionId, state.sqlResult]);
+
+  /**
+   * Reset conversation state back to IDLE (keeps DB connected).
    */
   const reset = useCallback(() => {
     dispatch({ type: 'RESET' });
@@ -256,8 +481,22 @@ export function useQueryFlow() {
     sqlResult: state.sqlResult,
     error: state.error,
     history: state.history,
+
+    // Database connection & session info
+    sessionId: state.sessionId,
+    schema: state.schema,
+    connectionString: state.connectionString,
+    isConnected: state.isConnected,
+    isConnecting: state.isConnecting,
+    connectionError: state.connectionError,
+    isPaginating: state.isPaginating,
+
+    // Methods
+    connectDb,
+    disconnectDb,
     submitQuery,
     submitClarification,
+    changePage,
     reset,
   };
 }
