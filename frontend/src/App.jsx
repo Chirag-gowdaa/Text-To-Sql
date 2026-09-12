@@ -1,289 +1,275 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useQueryFlow, STATUS } from './hooks/useQueryFlow';
-import Header from './components/Header';
+import { Menu, X, RotateCcw } from 'lucide-react';
+import { useQueryFlow } from './hooks/useQueryFlow';
+import Sidebar from './components/Sidebar';
 import ConnectionScreen from './components/ConnectionScreen';
-import SchemaViewer from './components/SchemaViewer';
 import QueryInput from './components/QueryInput';
 import ConversationThread from './components/ConversationThread';
-import ClarificationCard from './components/ClarificationCard';
-import LoadingState from './components/LoadingState';
 import ResultsPanel from './components/ResultsPanel';
-import ErrorState from './components/ErrorState';
+import LoadingText from './components/LoadingText';
+import ErrorCard from './components/ErrorCard';
 
 export default function App() {
   const {
     status,
+    sessionId,
+    dbType,
+    dbName,
+    schema,
     originalQuery,
     clarifications,
     currentQuestion,
-    turn,
     confidence,
-    reason,
+    turn,
     sqlResult,
+    executionTime,
     error,
+    page,
+    limit,
     history,
-    // Database connection & session
-    schema,
-    connectionString,
     isConnected,
-    isConnecting,
-    connectionError,
-    isPaginating,
     connectDb,
     disconnectDb,
     submitQuery,
     submitClarification,
-    changePage,
+    goToPage,
+    changeLimit,
     reset,
   } = useQueryFlow();
 
-  const [isSchemaCollapsed, setIsSchemaCollapsed] = useState(false);
+  // Dark / Light Theme management
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('queryMindTheme') || 'dark';
+  });
 
-  const showReset = status === STATUS.CLARIFYING || status === STATUS.RESULTS;
+  // Mobile drawer state for sidebar (< 768px)
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
-  return (
-    <div className="app-layout">
-      {/* Subtle Animated Ambient Background Blobs */}
-      <div className="ambient-bg" aria-hidden="true">
-        <div className="blob blob-1" />
-        <div className="blob blob-2" />
-        <div className="blob blob-3" />
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('queryMindTheme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
+
+  // Determine current breadcrumb state
+  const isQueryStepActive =
+    isConnected &&
+    (status === 'idle' || status === 'analyzing' || status === 'clarifying' || status === 'generating');
+  const isResultsStepActive = isConnected && status === 'results';
+
+  // SCREEN 1: Connection screen before connecting
+  if (!isConnected) {
+    return (
+      <div className="app-shell">
+        <ConnectionScreen
+          onConnect={connectDb}
+          isConnecting={status === 'connecting'}
+          error={status === 'error' ? error : null}
+        />
       </div>
+    );
+  }
 
-      {/* Glassmorphic Sticky Header with Theme Toggle & Connection Indicator */}
-      <Header
-        status={status}
-        isConnected={isConnected}
-        connectionString={connectionString}
-        onDisconnect={disconnectDb}
-      />
+  // SCREEN 2: Two-panel workspace after connecting
+  return (
+    <div className="app-shell">
+      <div className="two-panel-shell">
+        {/* Desktop Sidebar (280px fixed) */}
+        <div className="desktop-sidebar-wrapper" style={{ display: 'contents' }}>
+          <Sidebar
+            dbName={dbName || 'database'}
+            dbType={dbType}
+            schema={schema || ''}
+            onDisconnect={disconnectDb}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+          />
+        </div>
 
-      {/* Conditional Screen Flow */}
-      <AnimatePresence mode="wait">
-        {!isConnected ? (
-          /* 1. CONNECTION SCREEN */
-          <motion.main
-            key="connection-screen"
-            className="main-content"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -16 }}
-            transition={{ duration: 0.35, ease: 'easeOut' }}
-          >
-            <ConnectionScreen
-              onConnect={connectDb}
-              isConnecting={isConnecting}
-              connectionError={connectionError}
-            />
-          </motion.main>
-        ) : (
-          /* 2. QUERY SCREEN (Two-column layout with Schema Sidebar) */
-          <motion.main
-            key="query-workspace"
-            className="query-workspace"
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -16 }}
-            transition={{ duration: 0.35, ease: 'easeOut' }}
-          >
-            {/* Left Sidebar: Schema Tree Viewer */}
-            <SchemaViewer
-              schema={schema}
-              isCollapsed={isSchemaCollapsed}
-              onToggleCollapse={() => setIsSchemaCollapsed((prev) => !prev)}
-            />
-
-            {/* Right Column: Query & Conversation Flow */}
-            <div className="query-main-column">
-              {/* Hero banner when in IDLE */}
-              {status === STATUS.IDLE && history.length === 0 && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.1, duration: 0.4 }}
-                  style={{
-                    textAlign: 'center',
-                    padding: '8px 10px 4px',
-                  }}
-                >
-                  <div
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '4px 12px',
-                      borderRadius: '9999px',
-                      backgroundColor: 'rgba(108, 99, 255, 0.12)',
-                      border: '1px solid rgba(108, 99, 255, 0.25)',
-                      color: 'var(--primary)',
-                      fontSize: '0.8rem',
-                      fontWeight: '600',
-                      marginBottom: '12px',
-                    }}
-                  >
-                    <span>✨ Autonomous Multi-Turn SQL Clarification</span>
-                  </div>
-
-                  <h1
-                    style={{
-                      fontSize: 'clamp(1.6rem, 3.5vw, 2.3rem)',
-                      fontWeight: '800',
-                      letterSpacing: '-0.03em',
-                      lineHeight: '1.2',
-                      color: 'var(--text-primary)',
-                      marginBottom: '8px',
-                    }}
-                  >
-                    Talk to your Database in Plain English
-                  </h1>
-
-                  <p
-                    style={{
-                      fontSize: 'clamp(0.9rem, 1.8vw, 1rem)',
-                      color: 'var(--text-secondary)',
-                      maxWidth: '560px',
-                      margin: '0 auto',
-                      lineHeight: '1.5',
-                    }}
-                  >
-                    Detect ambiguities automatically, answer guided clarification questions,
-                    and execute verified SQL on your data with confidence.
-                  </p>
-                </motion.div>
-              )}
-
-              {/* Top Control Bar when session is active */}
-              {showReset && (
-                <motion.div
-                  initial={{ opacity: 0, y: -10 }}
-                  animate={{ opacity: 1, y: 0 }}
+        {/* Mobile Bottom Sheet Drawer (< 768px) */}
+        <AnimatePresence>
+          {mobileDrawerOpen && (
+            <>
+              {/* Overlay */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                onClick={() => setMobileDrawerOpen(false)}
+                style={{
+                  position: 'fixed',
+                  inset: 0,
+                  backgroundColor: 'rgba(0, 0, 0, 0.65)',
+                  zIndex: 90,
+                  backdropFilter: 'blur(2px)',
+                }}
+              />
+              {/* Drawer Sheet */}
+              <motion.div
+                initial={{ y: '100%' }}
+                animate={{ y: 0 }}
+                exit={{ y: '100%' }}
+                transition={{ duration: 0.25, ease: 'easeOut' }}
+                style={{
+                  position: 'fixed',
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  maxHeight: '80vh',
+                  backgroundColor: 'var(--surface)',
+                  borderTop: '1px solid var(--border)',
+                  zIndex: 100,
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
+                <div
                   style={{
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    padding: '4px 2px',
+                    padding: '12px 20px',
+                    borderBottom: '1px solid var(--border)',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span
-                      style={{
-                        width: '8px',
-                        height: '8px',
-                        borderRadius: '50%',
-                        backgroundColor: 'var(--primary)',
-                        boxShadow: '0 0 8px var(--primary)',
-                      }}
-                    />
-                    <span
-                      style={{
-                        fontSize: '0.86rem',
-                        fontWeight: '600',
-                        color: 'var(--text-secondary)',
-                      }}
-                    >
-                      Conversation History
-                    </span>
-                  </div>
-
-                  {/* Start Over / Reset Button */}
-                  <motion.button
+                  <span className="logo-text" style={{ fontSize: '16px' }}>
+                    Database Schema
+                  </span>
+                  <button
                     type="button"
-                    whileHover={{ scale: 1.03 }}
-                    whileTap={{ scale: 0.97 }}
-                    onClick={reset}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '7px 14px',
-                      borderRadius: '8px',
-                      background: 'var(--surface-elevated)',
-                      border: '1px solid var(--border)',
-                      color: 'var(--text-secondary)',
-                      fontSize: '0.82rem',
-                      fontWeight: '600',
-                      cursor: 'pointer',
-                      transition: 'all 0.2s ease',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--primary)';
-                      e.currentTarget.style.color = 'var(--text-primary)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.borderColor = 'var(--border)';
-                      e.currentTarget.style.color = 'var(--text-secondary)';
-                    }}
+                    className="ghost-action-btn"
+                    onClick={() => setMobileDrawerOpen(false)}
+                    style={{ padding: '4px' }}
                   >
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.2"
-                    >
-                      <polyline points="23 4 23 10 17 10" />
-                      <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                    </svg>
-                    <span>Start Over</span>
-                  </motion.button>
-                </motion.div>
-              )}
+                    <X size={18} />
+                  </button>
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto' }}>
+                  <Sidebar
+                    dbName={dbName || 'database'}
+                    dbType={dbType}
+                    schema={schema || ''}
+                    onDisconnect={() => {
+                      setMobileDrawerOpen(false);
+                      disconnectDb();
+                    }}
+                    theme={theme}
+                    onToggleTheme={toggleTheme}
+                  />
+                </div>
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
 
-              {/* Conversation Thread Bubbles */}
+        {/* Right Panel (Remaining Width) */}
+        <main className="main-panel">
+          {/* Top bar: Breadcrumb showing Connect → Query → Results */}
+          <header className="breadcrumb-bar">
+            <div className="breadcrumb-list">
+              {/* Mobile menu trigger */}
+              <button
+                type="button"
+                className="ghost-action-btn mobile-menu-btn"
+                onClick={() => setMobileDrawerOpen(true)}
+                style={{ padding: '4px', marginRight: '4px' }}
+                title="View Database Schema"
+              >
+                <Menu size={16} />
+              </button>
+
+              <span
+                style={{
+                  color: isConnected ? 'var(--accent)' : 'var(--text-3)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                }}
+              >
+                Connect
+              </span>
+              <span className="breadcrumb-separator">→</span>
+              <span className={`breadcrumb-item ${isQueryStepActive ? 'active' : ''}`}>
+                Query
+              </span>
+              <span className="breadcrumb-separator">→</span>
+              <span className={`breadcrumb-item ${isResultsStepActive ? 'active' : ''}`}>
+                Results
+              </span>
+            </div>
+
+            {/* Top Right: Reset/New Query if results or clarification present */}
+            {(status === 'results' || status === 'clarifying' || history.length > 0) && (
+              <button
+                type="button"
+                className="ghost-action-btn"
+                onClick={reset}
+                title="Start a new query"
+              >
+                <RotateCcw size={13} />
+                <span>New query</span>
+              </button>
+            )}
+          </header>
+
+          {/* Main workspace area */}
+          <div className="workspace-scrollable">
+            <div className="workspace-content-container">
+              {/* Section A: Query Input (Always accessible at top of workspace) */}
+              <QueryInput
+                onSubmit={submitQuery}
+                disabled={status === 'analyzing' || status === 'generating'}
+                initialValue={status === 'idle' ? originalQuery : ''}
+              />
+
+              {/* Section B: Conversation Thread */}
               <ConversationThread
                 history={history}
-                clarifications={clarifications}
                 status={status}
+                currentQuestion={currentQuestion}
+                confidence={confidence}
+                onSubmitClarification={submitClarification}
               />
 
-              {/* Dynamic State Machine Display */}
-              <AnimatePresence mode="wait">
-                {/* Loading States (ANALYZING or GENERATING) */}
-                {(status === STATUS.ANALYZING || status === STATUS.GENERATING) && (
-                  <LoadingState key="loading" status={status} />
-                )}
+              {/* SCREEN 3: Loading States (Analyzing / Generating with Schema preview) */}
+              {(status === 'analyzing' || status === 'generating') && (
+                <LoadingText status={status} schema={schema} />
+              )}
 
-                {/* Clarification Card (CLARIFYING) */}
-                {status === STATUS.CLARIFYING && (
-                  <ClarificationCard
-                    key={`clarify-${turn}`}
-                    question={currentQuestion}
-                    reason={reason}
-                    turn={turn}
-                    confidence={confidence}
-                    onSubmitAnswer={submitClarification}
-                  />
-                )}
+              {/* SCREEN 4: Error State */}
+              {status === 'error' && error && (
+                <ErrorCard
+                  error={error}
+                  onTryAgain={() => {
+                    if (originalQuery) {
+                      submitQuery(originalQuery);
+                    } else {
+                      reset();
+                    }
+                  }}
+                />
+              )}
 
-                {/* Results Panel (RESULTS) with Execution Time & Pagination */}
-                {status === STATUS.RESULTS && sqlResult && (
-                  <ResultsPanel
-                    key="results"
-                    sqlResult={sqlResult}
-                    onChangePage={changePage}
-                    isPaginating={isPaginating}
-                  />
-                )}
-
-                {/* Error State (ERROR) */}
-                {status === STATUS.ERROR && (
-                  <ErrorState key="error" error={error} onReset={reset} />
-                )}
-              </AnimatePresence>
-
-              {/* Query Input Area */}
-              <QueryInput
-                key={status === STATUS.IDLE ? 'idle' : `active-${originalQuery}`}
-                status={status}
-                originalQuery={originalQuery}
-                onSubmit={submitQuery}
-              />
+              {/* Section C: Results Section (SQL block, Results table, Pagination) */}
+              {status === 'results' && sqlResult && (
+                <ResultsPanel
+                  sqlResult={sqlResult}
+                  executionTime={executionTime}
+                  dbType={dbType}
+                  limit={limit}
+                  onPageChange={goToPage}
+                  onLimitChange={changeLimit}
+                />
+              )}
             </div>
-          </motion.main>
-        )}
-      </AnimatePresence>
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

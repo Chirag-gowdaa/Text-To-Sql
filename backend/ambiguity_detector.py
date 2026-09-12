@@ -24,12 +24,12 @@ def detect_ambiguity(user_query: str, schema: str) -> dict:
         
         Database schema:
         """
-                + schema
-                + """
+        + schema
+        + """
         
         User query: \""""
-                + user_query
-                + """\"
+        + user_query
+        + """\"
         
         Examples of AMBIGUOUS queries:
         - "show me recent orders" → recent is not defined
@@ -52,8 +52,9 @@ def detect_ambiguity(user_query: str, schema: str) -> dict:
         """
     )
     response = client.chat.completions.create(
-        model="qwen/qwen3.6-27b",  # ← use this
+        model="groq/compound-mini",
         messages=[{"role": "user", "content": prompt}],
+        max_tokens=300,
         temperature=0.1,
     )
 

@@ -1,502 +1,414 @@
-import { useReducer, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import {
-  analyzeQuery,
-  generateSQL,
   connectDatabase,
   disconnectDatabase,
-} from '../api/client';
+  analyzeQuery,
+  generateSQL,
+} from '../api/client.js';
 
-export const STATUS = {
-  IDLE: 'IDLE',
-  ANALYZING: 'ANALYZING',
-  CLARIFYING: 'CLARIFYING',
-  GENERATING: 'GENERATING',
-  RESULTS: 'RESULTS',
-  ERROR: 'ERROR',
-};
+export function extractDbType(connectionString) {
+  if (!connectionString) return 'SQLite';
+  const lower = connectionString.trim().toLowerCase();
+  if (lower.startsWith('sqlite')) return 'SQLite';
+  if (lower.startsWith('postgresql') || lower.startsWith('postgres')) return 'PostgreSQL';
+  if (lower.startsWith('mysql')) return 'MySQL';
+  return 'SQL Database';
+}
 
-const initialState = {
-  status: STATUS.IDLE,
-  originalQuery: '',
-  clarifications: [],
-  currentQuestion: '',
-  turn: 0,
-  confidence: 1,
-  reason: '',
-  sqlResult: null,
-  error: null,
-  history: [], // Array of { id, type, content, turn, confidence, reason, timestamp }
+export function extractDbName(connectionString) {
+  if (!connectionString) return 'database';
+  const cleaned = connectionString.trim().split('?')[0];
+  const lastSlashIndex = cleaned.lastIndexOf('/');
+  const rawTarget = lastSlashIndex !== -1 ? cleaned.slice(lastSlashIndex + 1) : cleaned;
 
-  // Database session & connection state
-  sessionId: null,
-  schema: null,
-  connectionString: '',
-  isConnected: false,
-  isConnecting: false,
-  connectionError: null,
-  isPaginating: false,
-};
-
-function queryFlowReducer(state, action) {
-  switch (action.type) {
-    case 'START_CONNECTING': {
-      return {
-        ...state,
-        isConnecting: true,
-        connectionError: null,
-      };
+  if (connectionString.trim().toLowerCase().startsWith('sqlite')) {
+    if (rawTarget.toLowerCase().endsWith('.db')) {
+      return rawTarget.slice(0, -3) || 'database';
     }
-
-    case 'CONNECT_SUCCESS': {
-      const { sessionId, schema, connectionString } = action.payload;
-      return {
-        ...state,
-        isConnected: true,
-        isConnecting: false,
-        sessionId,
-        schema,
-        connectionString,
-        connectionError: null,
-        status: STATUS.IDLE,
-        originalQuery: '',
-        clarifications: [],
-        history: [],
-        sqlResult: null,
-        error: null,
-        isPaginating: false,
-      };
-    }
-
-    case 'CONNECT_FAILURE': {
-      return {
-        ...state,
-        isConnecting: false,
-        isConnected: false,
-        connectionError: action.payload.error,
-      };
-    }
-
-    case 'DISCONNECT': {
-      return {
-        ...initialState,
-      };
-    }
-
-    case 'START_QUERY_ANALYSIS': {
-      const { query } = action.payload;
-      return {
-        ...state,
-        status: STATUS.ANALYZING,
-        originalQuery: query,
-        turn: 0,
-        clarifications: [],
-        sqlResult: null,
-        error: null,
-        history: [
-          {
-            id: `query-${Date.now()}`,
-            type: 'user_query',
-            content: query,
-            timestamp: Date.now(),
-          },
-        ],
-      };
-    }
-
-    case 'AMBIGUITY_DETECTED': {
-      const { question, reason, confidence, nextTurn } = action.payload;
-      return {
-        ...state,
-        status: STATUS.CLARIFYING,
-        currentQuestion: question,
-        reason: reason || '',
-        confidence: typeof confidence === 'number' ? confidence : 0.5,
-        turn: nextTurn,
-        history: [
-          ...state.history,
-          {
-            id: `clarify-${Date.now()}`,
-            type: 'system_clarification',
-            content: question,
-            reason: reason || '',
-            confidence: typeof confidence === 'number' ? confidence : 0.5,
-            turn: nextTurn,
-            timestamp: Date.now(),
-          },
-        ],
-      };
-    }
-
-    case 'START_CLARIFICATION_ANALYSIS': {
-      const { answer, updatedClarifications } = action.payload;
-      return {
-        ...state,
-        status: STATUS.ANALYZING,
-        clarifications: updatedClarifications,
-        history: [
-          ...state.history,
-          {
-            id: `answer-${Date.now()}`,
-            type: 'user_answer',
-            content: answer,
-            turn: state.turn,
-            timestamp: Date.now(),
-          },
-        ],
-      };
-    }
-
-    case 'START_GENERATING': {
-      return {
-        ...state,
-        status: STATUS.GENERATING,
-      };
-    }
-
-    case 'START_PAGINATING': {
-      return {
-        ...state,
-        isPaginating: true,
-      };
-    }
-
-    case 'SET_RESULTS': {
-      return {
-        ...state,
-        status: STATUS.RESULTS,
-        isPaginating: false,
-        sqlResult: action.payload,
-        error: null,
-      };
-    }
-
-    case 'SET_ERROR': {
-      return {
-        ...state,
-        status: STATUS.ERROR,
-        isPaginating: false,
-        error: action.payload.error,
-      };
-    }
-
-    case 'RESET': {
-      return {
-        ...state,
-        status: STATUS.IDLE,
-        originalQuery: '',
-        clarifications: [],
-        currentQuestion: '',
-        turn: 0,
-        confidence: 1,
-        reason: '',
-        sqlResult: null,
-        error: null,
-        history: [],
-        isPaginating: false,
-      };
-    }
-
-    default:
-      return state;
+    return rawTarget || 'database';
   }
+  return rawTarget || 'database';
+}
+
+export function formatExecutionTime(ms) {
+  if (ms == null) return null;
+  if (ms < 1000) {
+    return `${Math.round(ms)}ms`;
+  }
+  return `${(ms / 1000).toFixed(2)}s`;
 }
 
 export function useQueryFlow() {
-  const [state, dispatch] = useReducer(queryFlowReducer, initialState);
+  const [state, setState] = useState({
+    status: 'idle', // 'idle' | 'connecting' | 'analyzing' | 'clarifying' | 'generating' | 'results' | 'error'
+    sessionId: null,
+    dbType: null,
+    dbName: null,
+    schema: null,
+    originalQuery: '',
+    clarifications: [],
+    currentQuestion: null,
+    confidence: null,
+    turn: 0,
+    sqlResult: null,
+    executionTime: null,
+    error: null,
+    page: 1,
+    limit: 20,
+    history: [], // [{ id, type: 'user' | 'system' | 'answer', text, confidence, turn }]
+  });
 
-  /**
-   * Connect to database using connection string.
-   */
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   const connectDb = useCallback(async (connectionString) => {
-    const trimmed = (connectionString || '').trim();
-    if (!trimmed) {
-      dispatch({
-        type: 'CONNECT_FAILURE',
-        payload: { error: 'Please provide a valid database connection string.' },
-      });
-      return false;
-    }
+    const dbType = extractDbType(connectionString);
+    const dbName = extractDbName(connectionString);
 
-    dispatch({ type: 'START_CONNECTING' });
+    setState((prev) => ({
+      ...prev,
+      status: 'connecting',
+      error: null,
+      dbType,
+      dbName,
+    }));
 
     try {
-      const res = await connectDatabase(trimmed);
-      if (res && res.success) {
-        dispatch({
-          type: 'CONNECT_SUCCESS',
-          payload: {
-            sessionId: res.session_id,
-            schema: res.schema,
-            connectionString: trimmed,
-          },
-        });
-        return true;
-      } else {
-        const errorMsg =
-          res?.message || res?.error || 'Failed to connect to database. Check connection string.';
-        dispatch({
-          type: 'CONNECT_FAILURE',
-          payload: { error: errorMsg },
-        });
-        return false;
+      const data = await connectDatabase(connectionString);
+      if (!data || !data.success) {
+        throw new Error(data?.message || 'Failed to connect to database with provided connection string.');
       }
+
+      setState((prev) => ({
+        ...prev,
+        status: 'idle',
+        sessionId: data.session_id,
+        schema: data.schema || '',
+        dbType,
+        dbName,
+        originalQuery: '',
+        clarifications: [],
+        currentQuestion: null,
+        confidence: null,
+        turn: 0,
+        sqlResult: null,
+        executionTime: null,
+        error: null,
+        page: 1,
+        history: [],
+      }));
+      return true;
     } catch (err) {
-      dispatch({
-        type: 'CONNECT_FAILURE',
-        payload: { error: err.rawDetail || err.message || 'Connection failed.' },
-      });
+      setState((prev) => ({
+        ...prev,
+        status: 'error',
+        error: err.message || 'Database connection error.',
+      }));
       return false;
     }
   }, []);
 
-  /**
-   * Disconnect the current database session.
-   */
   const disconnectDb = useCallback(async () => {
-    if (state.sessionId) {
+    const currentSession = stateRef.current.sessionId;
+    if (currentSession) {
       try {
-        await disconnectDatabase(state.sessionId);
-      } catch (err) {
-        console.warn('Disconnect error ignored:', err);
+        await disconnectDatabase(currentSession);
+      } catch (e) {
+        console.warn('Disconnect warning:', e);
       }
     }
-    dispatch({ type: 'DISCONNECT' });
-  }, [state.sessionId]);
 
-  /**
-   * Submit the natural language query for the active session.
-   */
+    setState({
+      status: 'idle',
+      sessionId: null,
+      dbType: null,
+      dbName: null,
+      schema: null,
+      originalQuery: '',
+      clarifications: [],
+      currentQuestion: null,
+      confidence: null,
+      turn: 0,
+      sqlResult: null,
+      executionTime: null,
+      error: null,
+      page: 1,
+      limit: 20,
+      history: [],
+    });
+  }, []);
   const submitQuery = useCallback(async (query) => {
     const trimmed = (query || '').trim();
     if (!trimmed) return;
 
-    dispatch({ type: 'START_QUERY_ANALYSIS', payload: { query: trimmed } });
+    const currentSession = stateRef.current.sessionId;
+    if (!currentSession) {
+      setState((prev) => ({
+        ...prev,
+        status: 'error',
+        error: 'No active database session. Please connect first.',
+      }));
+      return;
+    }
+
+    const queryEntry = {
+      id: `q-${Date.now()}`,
+      type: 'user',
+      text: trimmed,
+    };
+
+    setState((prev) => ({
+      ...prev,
+      status: 'analyzing',
+      originalQuery: trimmed,
+      clarifications: [],
+      currentQuestion: null,
+      confidence: null,
+      turn: 0,
+      sqlResult: null,
+      executionTime: null,
+      error: null,
+      page: 1,
+      history: [queryEntry],
+    }));
 
     try {
-      const analyzeData = await analyzeQuery(trimmed, [], state.sessionId);
+      const analyzeResult = await analyzeQuery(trimmed, [], currentSession);
+      const isAmbiguous = Boolean(analyzeResult?.is_ambiguous);
 
-      if (analyzeData?.is_ambiguous) {
-        dispatch({
-          type: 'AMBIGUITY_DETECTED',
-          payload: {
-            question: analyzeData.clarification_question || 'Could you provide more details?',
-            reason: analyzeData.reason || 'The query requires clarification.',
-            confidence: analyzeData.confidence ?? 0.5,
-            nextTurn: 1,
-          },
-        });
+      if (isAmbiguous && analyzeResult?.clarification_question) {
+        const questionText = analyzeResult.clarification_question;
+        const confidenceScore = typeof analyzeResult.confidence === 'number' ? analyzeResult.confidence : 0.6;
+
+        setState((prev) => ({
+          ...prev,
+          status: 'clarifying',
+          currentQuestion: questionText,
+          confidence: confidenceScore,
+          turn: 0,
+          history: [
+            ...prev.history,
+            {
+              id: `c-0-${Date.now()}`,
+              type: 'system',
+              text: questionText,
+              confidence: confidenceScore,
+              turn: 0,
+            },
+          ],
+        }));
       } else {
-        // Query is clear -> immediately generate SQL & measure execution time
-        dispatch({ type: 'START_GENERATING' });
-        const startTime = performance.now();
-        const genData = await generateSQL(trimmed, [], state.sessionId, 20, 0);
-        const endTime = performance.now();
-        const executionTimeMs = Math.round(endTime - startTime);
+        // Direct generation
+        setState((prev) => ({ ...prev, status: 'generating' }));
+        const t0 = Date.now();
+        const genResult = await generateSQL(trimmed, [], currentSession, stateRef.current.limit, 0);
+        const t1 = Date.now();
+        const durationMs = t1 - t0;
 
-        dispatch({
-          type: 'SET_RESULTS',
-          payload: {
-            sql: genData.sql,
-            results: genData.results || [],
-            row_count: genData.row_count ?? (genData.results ? genData.results.length : 0),
-            total_count: genData.total_count ?? (genData.results ? genData.results.length : 0),
-            current_page: genData.current_page ?? 1,
-            total_pages: genData.total_pages ?? 1,
-            limit: genData.limit ?? 20,
-            offset: genData.offset ?? 0,
-            executionTimeMs,
-          },
-        });
+        setState((prev) => ({
+          ...prev,
+          status: 'results',
+          sqlResult: genResult,
+          executionTime: formatExecutionTime(durationMs),
+          page: 1,
+        }));
       }
     } catch (err) {
-      dispatch({
-        type: 'SET_ERROR',
-        payload: { error: err.rawDetail || err.message || 'Failed to process query' },
-      });
+      setState((prev) => ({
+        ...prev,
+        status: 'error',
+        error: err.message || 'Error occurred while processing query.',
+      }));
     }
-  }, [state.sessionId]);
+  }, []);
 
-  /**
-   * Submit an answer to a clarification question.
-   */
   const submitClarification = useCallback(async (answer) => {
-    const trimmedAnswer = (answer || '').trim();
-    if (!trimmedAnswer) return;
+    const trimmed = (answer || '').trim();
+    if (!trimmed) return;
 
-    const currentTurn = state.turn;
-    const updatedClarifications = [...state.clarifications, trimmedAnswer];
+    const {
+      originalQuery,
+      clarifications,
+      turn,
+      sessionId,
+      limit,
+    } = stateRef.current;
 
-    dispatch({
-      type: 'START_CLARIFICATION_ANALYSIS',
-      payload: {
-        answer: trimmedAnswer,
-        updatedClarifications,
-      },
-    });
+    const nextClarifications = [...clarifications, trimmed];
+    const nextTurn = turn + 1;
+
+    const answerEntry = {
+      id: `a-${nextTurn}-${Date.now()}`,
+      type: 'answer',
+      text: trimmed,
+      turn: nextTurn,
+    };
+
+    setState((prev) => ({
+      ...prev,
+      clarifications: nextClarifications,
+      turn: nextTurn,
+      history: [...prev.history, answerEntry],
+    }));
+
+    // If turn >= 3, force generate SQL directly without more questions
+    if (nextTurn >= 3) {
+      setState((prev) => ({ ...prev, status: 'generating' }));
+      try {
+        const t0 = Date.now();
+        const genResult = await generateSQL(originalQuery, nextClarifications, sessionId, limit, 0);
+        const t1 = Date.now();
+        const durationMs = t1 - t0;
+
+        setState((prev) => ({
+          ...prev,
+          status: 'results',
+          sqlResult: genResult,
+          executionTime: formatExecutionTime(durationMs),
+          page: 1,
+        }));
+      } catch (err) {
+        setState((prev) => ({
+          ...prev,
+          status: 'error',
+          error: err.message || 'Error generating SQL from clarifications.',
+        }));
+      }
+      return;
+    }
+
+    // Otherwise, re-call /analyze to check if query is still ambiguous
+    setState((prev) => ({ ...prev, status: 'analyzing' }));
 
     try {
-      // If turn was already 3, force generate regardless
-      if (currentTurn >= 3) {
-        dispatch({ type: 'START_GENERATING' });
-        const startTime = performance.now();
-        const genData = await generateSQL(
-          state.originalQuery,
-          updatedClarifications,
-          state.sessionId,
-          20,
-          0
-        );
-        const endTime = performance.now();
-        const executionTimeMs = Math.round(endTime - startTime);
+      const analyzeResult = await analyzeQuery(originalQuery, nextClarifications, sessionId);
+      const isAmbiguous = Boolean(analyzeResult?.is_ambiguous);
 
-        dispatch({
-          type: 'SET_RESULTS',
-          payload: {
-            sql: genData.sql,
-            results: genData.results || [],
-            row_count: genData.row_count ?? (genData.results ? genData.results.length : 0),
-            total_count: genData.total_count ?? (genData.results ? genData.results.length : 0),
-            current_page: genData.current_page ?? 1,
-            total_pages: genData.total_pages ?? 1,
-            limit: genData.limit ?? 20,
-            offset: genData.offset ?? 0,
-            executionTimeMs,
-          },
-        });
-        return;
-      }
+      if (isAmbiguous && analyzeResult?.clarification_question) {
+        const questionText = analyzeResult.clarification_question;
+        const confidenceScore = typeof analyzeResult.confidence === 'number' ? analyzeResult.confidence : 0.65;
 
-      // Re-analyze with updated clarifications
-      const analyzeData = await analyzeQuery(
-        state.originalQuery,
-        updatedClarifications,
-        state.sessionId
-      );
-
-      if (analyzeData?.is_ambiguous && currentTurn < 3) {
-        dispatch({
-          type: 'AMBIGUITY_DETECTED',
-          payload: {
-            question: analyzeData.clarification_question || 'Could you clarify further?',
-            reason: analyzeData.reason || 'Additional detail is required.',
-            confidence: analyzeData.confidence ?? 0.6,
-            nextTurn: currentTurn + 1,
-          },
-        });
+        setState((prev) => ({
+          ...prev,
+          status: 'clarifying',
+          currentQuestion: questionText,
+          confidence: confidenceScore,
+          history: [
+            ...prev.history,
+            {
+              id: `c-${nextTurn}-${Date.now()}`,
+              type: 'system',
+              text: questionText,
+              confidence: confidenceScore,
+              turn: nextTurn,
+            },
+          ],
+        }));
       } else {
-        dispatch({ type: 'START_GENERATING' });
-        const startTime = performance.now();
-        const genData = await generateSQL(
-          state.originalQuery,
-          updatedClarifications,
-          state.sessionId,
-          20,
-          0
-        );
-        const endTime = performance.now();
-        const executionTimeMs = Math.round(endTime - startTime);
+        // Query clarified! Now generate SQL
+        setState((prev) => ({ ...prev, status: 'generating' }));
+        const t0 = Date.now();
+        const genResult = await generateSQL(originalQuery, nextClarifications, sessionId, limit, 0);
+        const t1 = Date.now();
+        const durationMs = t1 - t0;
 
-        dispatch({
-          type: 'SET_RESULTS',
-          payload: {
-            sql: genData.sql,
-            results: genData.results || [],
-            row_count: genData.row_count ?? (genData.results ? genData.results.length : 0),
-            total_count: genData.total_count ?? (genData.results ? genData.results.length : 0),
-            current_page: genData.current_page ?? 1,
-            total_pages: genData.total_pages ?? 1,
-            limit: genData.limit ?? 20,
-            offset: genData.offset ?? 0,
-            executionTimeMs,
-          },
-        });
+        setState((prev) => ({
+          ...prev,
+          status: 'results',
+          sqlResult: genResult,
+          executionTime: formatExecutionTime(durationMs),
+          page: 1,
+        }));
       }
     } catch (err) {
-      dispatch({
-        type: 'SET_ERROR',
-        payload: { error: err.rawDetail || err.message || 'Failed to process clarification' },
-      });
+      setState((prev) => ({
+        ...prev,
+        status: 'error',
+        error: err.message || 'Error analyzing clarification.',
+      }));
     }
-  }, [state.turn, state.clarifications, state.originalQuery, state.sessionId]);
+  }, []);
 
-  /**
-   * Request a different page of results for the existing query without resetting session.
-   */
-  const changePage = useCallback(async (newPage, newLimit) => {
-    if (!state.originalQuery || !state.sessionId) return;
-    const limit = newLimit || state.sqlResult?.limit || 20;
-    const offset = Math.max(0, (newPage - 1) * limit);
+  const goToPage = useCallback(async (pageNumber) => {
+    const { originalQuery, clarifications, sessionId, limit } = stateRef.current;
+    if (!sessionId || !originalQuery) return;
 
-    dispatch({ type: 'START_PAGINATING' });
+    const offset = Math.max(0, (pageNumber - 1) * limit);
 
-    const startTime = performance.now();
     try {
-      const genData = await generateSQL(
-        state.originalQuery,
-        state.clarifications,
-        state.sessionId,
-        limit,
-        offset
-      );
-      const endTime = performance.now();
-      const executionTimeMs = Math.round(endTime - startTime);
+      const t0 = Date.now();
+      const genResult = await generateSQL(originalQuery, clarifications, sessionId, limit, offset);
+      const t1 = Date.now();
+      const durationMs = t1 - t0;
 
-      dispatch({
-        type: 'SET_RESULTS',
-        payload: {
-          sql: genData.sql || state.sqlResult?.sql,
-          results: genData.results || [],
-          row_count: genData.row_count ?? (genData.results ? genData.results.length : 0),
-          total_count: genData.total_count ?? state.sqlResult?.total_count ?? (genData.results ? genData.results.length : 0),
-          current_page: genData.current_page ?? newPage,
-          total_pages: genData.total_pages ?? Math.max(1, Math.ceil((genData.total_count || 1) / limit)),
-          limit: genData.limit ?? limit,
-          offset: genData.offset ?? offset,
-          executionTimeMs,
-        },
-      });
+      setState((prev) => ({
+        ...prev,
+        status: 'results',
+        sqlResult: genResult,
+        executionTime: formatExecutionTime(durationMs),
+        page: pageNumber,
+      }));
     } catch (err) {
-      dispatch({
-        type: 'SET_ERROR',
-        payload: { error: err.rawDetail || err.message || 'Failed to load page' },
-      });
+      setState((prev) => ({
+        ...prev,
+        error: err.message || 'Failed to navigate to requested page.',
+      }));
     }
-  }, [state.originalQuery, state.clarifications, state.sessionId, state.sqlResult]);
+  }, []);
 
-  /**
-   * Reset conversation state back to IDLE (keeps DB connected).
-   */
+  const changeLimit = useCallback(async (newLimit) => {
+    const num = Number(newLimit) || 20;
+    const { originalQuery, clarifications, sessionId } = stateRef.current;
+    if (!sessionId || !originalQuery) return;
+
+    try {
+      const t0 = Date.now();
+      const genResult = await generateSQL(originalQuery, clarifications, sessionId, num, 0);
+      const t1 = Date.now();
+      const durationMs = t1 - t0;
+
+      setState((prev) => ({
+        ...prev,
+        limit: num,
+        page: 1,
+        status: 'results',
+        sqlResult: genResult,
+        executionTime: formatExecutionTime(durationMs),
+      }));
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        error: err.message || 'Failed to update page size.',
+      }));
+    }
+  }, []);
+
   const reset = useCallback(() => {
-    dispatch({ type: 'RESET' });
+    setState((prev) => ({
+      ...prev,
+      status: 'idle',
+      originalQuery: '',
+      clarifications: [],
+      currentQuestion: null,
+      confidence: null,
+      turn: 0,
+      sqlResult: null,
+      executionTime: null,
+      error: null,
+      page: 1,
+      history: [],
+    }));
   }, []);
 
   return {
-    status: state.status,
-    originalQuery: state.originalQuery,
-    clarifications: state.clarifications,
-    currentQuestion: state.currentQuestion,
-    turn: state.turn,
-    confidence: state.confidence,
-    reason: state.reason,
-    sqlResult: state.sqlResult,
-    error: state.error,
-    history: state.history,
-
-    // Database connection & session info
-    sessionId: state.sessionId,
-    schema: state.schema,
-    connectionString: state.connectionString,
-    isConnected: state.isConnected,
-    isConnecting: state.isConnecting,
-    connectionError: state.connectionError,
-    isPaginating: state.isPaginating,
-
-    // Methods
+    ...state,
+    isConnected: Boolean(state.sessionId),
     connectDb,
     disconnectDb,
     submitQuery,
     submitClarification,
-    changePage,
+    goToPage,
+    changeLimit,
     reset,
   };
 }

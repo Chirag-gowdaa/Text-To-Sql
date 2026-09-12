@@ -5,9 +5,10 @@ import os
 
 load_dotenv()
 
-client = Groq(api_key = os.getenv("GROQ_LLM_API_KEY"))
+client = Groq(api_key=os.getenv("GROQ_LLM_API_KEY"))
 
-def generate_sql(query , schema, clarifications = []   ):
+
+def generate_sql(query, schema, clarifications=[]):
     clarification_text = (
         "\n".join([f"- {c}" for c in clarifications]) if clarifications else "None"
     )
@@ -31,11 +32,9 @@ def generate_sql(query , schema, clarifications = []   ):
     """
 
     response = client.chat.completions.create(
-        model="qwen/qwen3.6-27b",
+        model="groq/compound-mini",
         messages=[{"role": "user", "content": prompt}],
-        max_completion_tokens = 512,
-        max_tokens = 500,
-        reasoning_effort = "none",
+        max_tokens=500,
         temperature=0,
     )
 
@@ -58,6 +57,6 @@ if __name__ == "__main__":
         order_date DATE,
         total_amount DECIMAL(10, 2)
     )
-    """ #""" is used to create multi-line strings in Python. It allows you to include line breaks and indentation in the string without using escape characters.
+    """  # """ is used to create multi-line strings in Python. It allows you to include line breaks and indentation in the string without using escape characters.
     sql_query = generate_sql(user_query, schema)
     print("Generated SQL query:", sql_query)
